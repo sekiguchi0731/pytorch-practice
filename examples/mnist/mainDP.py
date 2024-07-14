@@ -37,13 +37,46 @@ class Net(nn.Module):
 
 
 def train(args, model, device, train_loader, optimizer, epoch) -> None:
-    model.train()
+    # グローバルモデルのパラメータを保存
+    torch.save(model.state_dict(), "mnist_cnn.pt")
+    # ローカルモデルに読み込み
+    ## モデルのインスタンスを作成（同じモデルの定義が必要）
+    local_model = Net()
+    ## 保存したパラメータを読み込み
+    local_model.load_state_dict(torch.load("mnist_cnn.pt"))
+    local_model.train()
     for batch_idx, (data, target) in enumerate(train_loader):
-        data, target = data.to(device), target.to(device)
+        # data, target = data.to(device), target.to(device)
         optimizer.zero_grad()
-        output: torch.Tensor = model(data)
+        output: torch.Tensor = local_model(data)
         loss: torch.Tensor = F.nll_loss(output, target)
         loss.backward()
+        # 計算された勾配を保存
+        grads: list[torch.Tensor] = [
+            param.grad.clone()
+            for param in local_model.parameters()
+            if param.grad is not None
+        ]
+        eps = 0.5
+        sensitivity = 1.0
+        mean = 0
+        var: float = sensitivity / eps
+        noised_grads: list[torch.Tensor] = []
+
+        for grad in grads:
+            noise: torch.Tensor = torch.distributions.Laplace(mean, var).sample(
+                grad.shape
+            )
+            noised_grads.append(grad + noise)
+        # z = torch.distributions.Laplace(mean, var, d)
+        # _grads: list[torch.Tensor] = [grad + z for grad in grads]
+        # 勾配をデバイスに転送
+        grads_device: list[torch.Tensor] = [grad.to(device) for grad in noised_grads]
+        # オプティマイザのパラメータに手動で勾配を設定
+        for param, grad in zip(model.parameters(), grads_device):
+            param.grad = grad
+
+        # パラメータの更新
         optimizer.step()
         if batch_idx % args.log_interval == 0:
             print(
@@ -66,11 +99,11 @@ def test(model, device, test_loader) -> None:
     with torch.no_grad():
         for data, target in test_loader:
             data, target = data.to(device), target.to(device)
-            output: torch.Tensor = model(data)
+            output = model(data)
             test_loss += F.nll_loss(
                 output, target, reduction="sum"
             ).item()  # sum up batch loss
-            pred: torch.Tensor = output.argmax(
+            pred = output.argmax(
                 dim=1, keepdim=True
             )  # get the index of the max log-probability
             correct += pred.eq(target.view_as(pred)).sum().item()
