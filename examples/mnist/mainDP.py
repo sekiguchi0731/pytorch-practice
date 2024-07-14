@@ -10,8 +10,16 @@ from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
 
+class PrivacyParams:
+    def __init__(self, eps: float = 0.5, sensitivity: float = 1.0, mean: float = 0):
+        self.eps: float = eps
+        self.sensitivity: float = sensitivity
+        self.mean: float = mean
+        self.var: float = self.sensitivity / self.eps
+
+
 class Net(nn.Module):
-    def __init__(self) -> None:
+    def __init__(self, privacy_params: PrivacyParams) -> None:
         super(Net, self).__init__()
         self.conv1 = nn.Conv2d(1, 32, 3, 1)
         self.conv2 = nn.Conv2d(32, 64, 3, 1)
@@ -19,6 +27,7 @@ class Net(nn.Module):
         self.dropout2 = nn.Dropout(0.5)
         self.fc1 = nn.Linear(9216, 128)
         self.fc2 = nn.Linear(128, 10)
+        self.privacy_params: PrivacyParams = privacy_params
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.conv1(x)
@@ -41,7 +50,7 @@ def train(args, model, device, train_loader, optimizer, epoch) -> None:
     torch.save(model.state_dict(), "mnist_cnn.pt")
     # ローカルモデルに読み込み
     ## モデルのインスタンスを作成（同じモデルの定義が必要）
-    local_model = Net()
+    local_model = Net(model.privacy_params)
     ## 保存したパラメータを読み込み
     local_model.load_state_dict(torch.load("mnist_cnn.pt"))
     local_model.train()
@@ -57,19 +66,15 @@ def train(args, model, device, train_loader, optimizer, epoch) -> None:
             for param in local_model.parameters()
             if param.grad is not None
         ]
-        eps = 0.5
-        sensitivity = 1.0
-        mean = 0
-        var: float = sensitivity / eps
+
         noised_grads: list[torch.Tensor] = []
+        privacy_params: PrivacyParams = model.privacy_params
 
         for grad in grads:
-            noise: torch.Tensor = torch.distributions.Laplace(mean, var).sample(
-                grad.shape
-            )
+            noise: torch.Tensor = torch.distributions.Laplace(
+                privacy_params.mean, privacy_params.var
+            ).sample(grad.shape)
             noised_grads.append(grad + noise)
-        # z = torch.distributions.Laplace(mean, var, d)
-        # _grads: list[torch.Tensor] = [grad + z for grad in grads]
         # 勾配をデバイスに転送
         grads_device: list[torch.Tensor] = [grad.to(device) for grad in noised_grads]
         # オプティマイザのパラメータに手動で勾配を設定
@@ -217,7 +222,8 @@ def main() -> None:
     train_loader = DataLoader(dataset1, **train_kwargs)
     test_loader = DataLoader(dataset2, **test_kwargs)
 
-    model: Net = Net().to(device)
+    privacy_params = PrivacyParams(eps=0.5, sensitivity=1.0, mean=0)
+    model: Net = Net(privacy_params).to(device)
     optimizer = optim.Adadelta(model.parameters(), lr=args.lr)
 
     scheduler = StepLR(optimizer, step_size=1, gamma=args.gamma)
