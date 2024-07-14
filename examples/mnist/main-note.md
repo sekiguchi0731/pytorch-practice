@@ -454,31 +454,99 @@ if batch_idx % args.log_interval == 0:
 
 ### テスト関数
 
+以下に、`test` 関数の各行を解説します。
+
 ```python
 def test(model, device, test_loader) -> None:
-    model.eval()
-    test_loss = 0
-    correct = 0
-    with torch.no_grad():
-        for data, target in test_loader:
-            data, target = data.to(device), target.to(device)
-            output = model(data)
-            test_loss += F.nll_loss(output, target, reduction='sum').item()  # sum up batch loss
-            pred = output.argmax(dim=1, keepdim=True)  # get the index of the max log-probability
-            correct += pred.eq(target.view_as(pred)).sum().item()
-
-    test_loss /= len(test_loader.dataset)
-
-    print('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
-        test_loss, correct, len(test_loader.dataset),
-        100. * correct / len(test_loader.dataset)))
 ```
 
-この`test`関数は、テストデータセットでモデルの評価を行います。
+- **関数定義**: `model`、`device`、`test_loader` を引数として受け取る `test` 関数を定義
+- 戻り値は `None` です。
 
-- モデルを評価モードに設定（`model.eval()`）。
-- `torch.no_grad()`を使用して、勾配計算を無効にします。
-- テストデータセット全体の損失と正解率を計算し、表示します。
+```python
+    model.eval()
+```
+
+- **評価モードに設定**: モデルを評価モードに設定
+  - これにより、ドロップアウトやバッチ正規化などのレイヤーが推論モードで動作するようになる
+
+```python
+    test_loss = 0
+    correct = 0
+```
+
+- **初期化**: テスト損失 (`test_loss`) と正解数 (`correct`) を初期化
+  - テストデータに対する評価結果を格納するための変数
+
+```python
+    with torch.no_grad():
+```
+
+- **勾配計算を無効にする**: `with torch.no_grad()` ブロック内では勾配計算が無効になる
+  - メモリ使用量が減少し、計算が高速化
+
+```python
+        for data, target in test_loader:
+```
+
+- **テストデータの反復処理**: テストデータローダーから `data` と `target` を取り出してループを開始
+
+```python
+            data, target = data.to(device), target.to(device)
+```
+
+- **デバイスへの転送**: テストデータ (`data`) とターゲット (`target`) を指定されたデバイス（CPU または GPU）に転送
+
+```python
+            output: torch.Tensor = model(data)
+```
+
+- **フォワードパス**: モデルにテストデータを入力し、出力を計算
+  - 出力は予測結果のテンソル
+
+```python
+            test_loss += F.nll_loss(
+                output, target, reduction="sum"
+            ).item()  # sum up batch loss
+```
+
+- **損失の計算**: 出力とターゲットを比較して損失を計算
+  - ここでは負の対数尤度損失 (`nll_loss`) を使用しており、バッチ全体の損失を合計
+
+```python
+            pred = output.argmax(
+                dim=1, keepdim=True
+            )  # get the index of the max log-probability
+```
+
+- **予測の取得**: 出力テンソルの最大値のインデックスを取得し、最も確率の高いクラスを予測として取得
+
+```python
+            correct += pred.eq(target.view_as(pred)).sum().item()
+```
+
+- **正解数のカウント**: 予測が正解と一致した場合の数をカウントし、正解数 (`correct`) に加算
+
+```python
+    test_loss /= len(test_loader.dataset)
+```
+
+- **平均損失の計算**: テストセット全体の平均損失を計算
+  - 合計損失をテストデータセットのサンプル数で割る
+
+```python
+    print(
+        "\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n".format(
+            test_loss,
+            correct,
+            len(test_loader.dataset),
+            100.0 * correct / len(test_loader.dataset),
+        )
+    )
+```
+
+- **結果の表示**: テストセットの平均損失、正解数、総サンプル数、正解率（パーセンテージ）を表示し
+- `print` 関数を使ってフォーマットされた文字列を出力
 
 ### メイン関数
 
