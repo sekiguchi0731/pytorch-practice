@@ -104,11 +104,11 @@ def test(model, device, test_loader) -> None:
     with torch.no_grad():
         for data, target in test_loader:
             data, target = data.to(device), target.to(device)
-            output = model(data)
+            output: torch.Tensor = model(data)
             test_loss += F.nll_loss(
                 output, target, reduction="sum"
             ).item()  # sum up batch loss
-            pred = output.argmax(
+            pred: torch.Tensor = output.argmax(
                 dim=1, keepdim=True
             )  # get the index of the max log-probability
             correct += pred.eq(target.view_as(pred)).sum().item()
@@ -210,7 +210,7 @@ def main() -> None:
     train_kwargs: dict[str, Any] = {"batch_size": args.batch_size}
     test_kwargs: dict[str, Any] = {"batch_size": args.test_batch_size}
     if use_cuda:
-        cuda_kwargs = {"num_workers": 1, "pin_memory": True, "shuffle": True}
+        cuda_kwargs: dict[str, Any] = {"num_workers": 1, "pin_memory": True, "shuffle": True}
         train_kwargs.update(cuda_kwargs)
         test_kwargs.update(cuda_kwargs)
 
