@@ -1,6 +1,7 @@
 import argparse
 from typing import Any
 
+import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -8,7 +9,6 @@ import torch.optim as optim
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
-import matplotlib.pyplot as plt
 
 
 class PrivacyParams:
@@ -238,24 +238,41 @@ def main() -> None:
 
     scheduler = StepLR(optimizer, step_size=1, gamma=args.gamma)
 
-    correct_list: list[int] = []
-    for epoch in range(1, args.epochs + 1):
-        train(args, model, device, train_loader, optimizer, epoch)
-        correct: int = test(model, device, test_loader)
-        correct_list.append(correct)
-        scheduler.step()
+    eps_values: list[float] = [0.1 * i for i in range(1, 11)]
+    all_correct_lists: list[list[int]] = []
 
-    # グラフの作成
-    plt.figure()
-    plt.plot(range(1, args.epochs + 1), correct_list, marker="o")
-    plt.xlabel("Epoch")
-    plt.ylabel("Correct")
-    plt.title("Number of Correct Predictions per Epoch")
-    plt.grid()
-    plt.show()
+    for eps in eps_values:
+        privacy_params = PrivacyParams(eps=eps, sensitivity=1.0, mean=0)
+        model: Net = Net(privacy_params).to(device)
+        optimizer = optim.Adadelta(model.parameters(), lr=args.lr)
+
+        scheduler = StepLR(optimizer, step_size=1, gamma=args.gamma)
+        correct_list: list[int] = []
+
+        for epoch in range(1, args.epochs + 1):
+            train(args, model, device, train_loader, optimizer, epoch)
+            correct: int = test(model, device, test_loader)
+            correct_list.append(correct)
+            scheduler.step()
+
+        all_correct_lists.append(correct_list)
 
     if args.save_model:
         torch.save(model.state_dict(), "mnist_cnn.pt")
+
+    # グラフの作成
+    plt.figure()
+    for i, correct_list in enumerate(all_correct_lists):
+        eps: float = eps_values[i]
+        plt.plot(
+            range(1, args.epochs + 1), correct_list, marker="o", label=f"eps={eps}"
+        )
+    plt.xlabel("Epoch")
+    plt.ylabel("Correct")
+    plt.title("Number of Correct Predictions per Epoch for Different eps Values")
+    plt.legend()
+    plt.grid()
+    plt.show()
 
 
 if __name__ == "__main__":
