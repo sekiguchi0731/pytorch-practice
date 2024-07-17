@@ -59,7 +59,7 @@ def train(args, model, device, train_loader, optimizer, epoch) -> None:
                 break
 
 
-def test(model, device, test_loader) -> None:
+def test(model, device, test_loader) -> int:
     model.eval()
     test_loss = 0
     correct = 0
@@ -73,7 +73,7 @@ def test(model, device, test_loader) -> None:
             pred: torch.Tensor = output.argmax(
                 dim=1, keepdim=True
             )  # get the index of the max log-probability
-            correct += pred.eq(target.view_as(pred)).sum().item()
+            correct += int(pred.eq(target.view_as(pred)).sum().item())
 
     test_loss /= len(test_loader.dataset)
 
@@ -85,6 +85,8 @@ def test(model, device, test_loader) -> None:
             100.0 * correct / len(test_loader.dataset),
         )
     )
+
+    return correct
 
 
 def main() -> None:
@@ -188,10 +190,16 @@ def main() -> None:
     optimizer = optim.Adadelta(model.parameters(), lr=args.lr)
 
     scheduler = StepLR(optimizer, step_size=1, gamma=args.gamma)
+
+    correct_list: list[int] = []
+
     for epoch in range(1, args.epochs + 1):
         train(args, model, device, train_loader, optimizer, epoch)
-        test(model, device, test_loader)
+        correct: int = test(model, device, test_loader)
+        correct_list.append(correct)
         scheduler.step()
+    
+    print(correct_list)
 
     if args.save_model:
         torch.save(model.state_dict(), "mnist_cnn.pt")
