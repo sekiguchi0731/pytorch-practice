@@ -240,6 +240,22 @@ def main() -> None:
 
     eps_values: list[float] = [0.1 * i for i in range(1, 11)]
     all_correct_lists: list[list[int]] = []
+    noDP_data: list[int] = [
+        1122,
+        3119,
+        4230,
+        4861,
+        5003,
+        5201,
+        5350,
+        5496,
+        5546,
+        5623,
+        5675,
+        5698,
+        5704,
+        5716,
+    ]
 
     for eps in eps_values:
         privacy_params = PrivacyParams(eps=eps, sensitivity=1.0, mean=0)
@@ -261,17 +277,36 @@ def main() -> None:
         torch.save(model.state_dict(), "mnist_cnn.pt")
 
     # グラフの作成
-    plt.figure()
+    fig, axes = plt.subplots(5, 2, figsize=(15, 25))
+    axes = axes.flatten()
+
     for i, correct_list in enumerate(all_correct_lists):
         eps: float = eps_values[i]
-        plt.plot(
-            range(1, args.epochs + 1), correct_list, marker="o", label=f"eps={eps}"
+        axes[i].plot(
+            range(1, args.epochs + 1),
+            correct_list,
+            marker="o",
+            label=f"With DP eps={eps:.1f}",
         )
-    plt.xlabel("Epoch")
-    plt.ylabel("Correct")
-    plt.title("Number of Correct Predictions per Epoch for Different eps Values")
-    plt.legend()
-    plt.grid()
+        axes[i].plot(
+            range(1, len(noDP_data) + 1),
+            noDP_data,
+            marker="x",
+            label="No DP (Raw Data)",
+        )
+        axes[i].set_xlabel("Epoch")
+        axes[i].set_ylabel("Correct")
+        axes[i].set_ylim([0, 10000])
+        axes[i].set_title(f"eps={eps:.1f}")
+        axes[i].legend()
+        axes[i].grid()
+
+    plt.suptitle(
+        "Impact of Laplace Mechanism for DP on Model Accuracy"
+    )  # 全体のタイトルを設定
+    plt.tight_layout(
+        rect=(0, 0, 1, 0.97)
+    )  # 全体のタイトルを表示するためにレイアウトを調整
     plt.show()
 
 
