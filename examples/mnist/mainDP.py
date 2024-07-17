@@ -47,13 +47,12 @@ class Net(nn.Module):
 
 
 def train(args, model, device, train_loader, optimizer, epoch) -> None:
-    # グローバルモデルのパラメータを保存
-    torch.save(model.state_dict(), "mnist_cnn.pt")
+    model.train()
     # ローカルモデルに読み込み
     ## モデルのインスタンスを作成（同じモデルの定義が必要）
     local_model = Net(model.privacy_params)
-    ## 保存したパラメータを読み込み
-    local_model.load_state_dict(torch.load("mnist_cnn.pt"))
+    ## グローバルモデルのパラメータを読み込み
+    local_model.load_state_dict(model.state_dict())
     local_model.train()
     for batch_idx, (data, target) in enumerate(train_loader):
         # data, target = data.to(device), target.to(device)
@@ -76,11 +75,10 @@ def train(args, model, device, train_loader, optimizer, epoch) -> None:
                 privacy_params.mean, privacy_params.var
             ).sample(grad.shape)
             noised_grads.append(grad + noise)
-        # 勾配をデバイスに転送
-        grads_device: list[torch.Tensor] = [grad.to(device) for grad in noised_grads]
+
         # オプティマイザのパラメータに手動で勾配を設定
-        for param, grad in zip(model.parameters(), grads_device):
-            param.grad = grad
+        for param, grad in zip(model.parameters(), noised_grads):
+            param.grad = grad.to(device)
 
         # パラメータの更新
         optimizer.step()
@@ -99,13 +97,12 @@ def train(args, model, device, train_loader, optimizer, epoch) -> None:
 
 
 def test(model, device, test_loader) -> int:
-    # グローバルモデルのパラメータを保存
-    torch.save(model.state_dict(), "mnist_cnn.pt")
+    model.eval()
     # ローカルモデルに読み込み
     ## モデルのインスタンスを作成（同じモデルの定義が必要）
     local_model = Net(model.privacy_params)
-    ## 保存したパラメータを読み込み
-    local_model.load_state_dict(torch.load("mnist_cnn.pt"))
+    ## グローバルモデルのパラメータを読み込み
+    local_model.load_state_dict(model.state_dict())
     local_model.eval()
     test_loss: float = 0
     correct: int = 0
@@ -238,7 +235,7 @@ def main() -> None:
 
     scheduler = StepLR(optimizer, step_size=1, gamma=args.gamma)
 
-    eps_values: list[float] = [0.1 * i for i in range(1, 11)]
+    eps_values: list[float] = [0.1 * i for i in range(1, 3)]
     all_correct_lists: list[list[int]] = []
     noDP_data: list[int] = [
         1122,
