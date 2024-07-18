@@ -2,6 +2,7 @@ import argparse
 from typing import Any
 
 import matplotlib.pyplot as plt
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -12,7 +13,7 @@ from torchvision import datasets, transforms
 
 
 class PrivacyParams:
-    def __init__(self, eps: float = 0.5, sensitivity: float = 1.0, mean: float = 0):
+    def __init__(self, eps: float = 0.5, sensitivity: float = 1.0, mean: float = 0) -> None:
         self.eps: float = eps
         self.sensitivity: float = sensitivity
         self.mean: float = mean
@@ -73,12 +74,14 @@ def train(args, model, device, train_loader, optimizer, epoch) -> None:
         for grad in grads:
             noise: torch.Tensor = torch.distributions.Laplace(
                 privacy_params.mean, privacy_params.var
-            ).sample(grad.shape)
+            ).sample(grad.shape) / math.sqrt(len(grads))
             noised_grads.append(grad + noise)
 
         # オプティマイザのパラメータに手動で勾配を設定
         for param, grad in zip(model.parameters(), noised_grads):
             param.grad = grad.to(device)
+        # for param, grad in zip(model.parameters(), grads):
+        #     param.grad = grad.to(device)
 
         # パラメータの更新
         optimizer.step()
@@ -130,6 +133,60 @@ def test(model, device, test_loader) -> int:
     )
 
     return correct
+
+def plot_graph(
+    args, eps_values: list[float], all_correct_lists: list[list[int]]
+) -> None:
+    # DPを実装しなかった場合の結果の一例
+    noDP_data: list[int] = [
+        1122,
+        3119,
+        4230,
+        4861,
+        5003,
+        5201,
+        5350,
+        5496,
+        5546,
+        5623,
+        5675,
+        5698,
+        5704,
+        5716,
+    ]
+    # グラフの作成
+    fig, axes = plt.subplots(5, 2, figsize=(15, 25))
+    axes = axes.flatten()
+
+    for i, correct_list in enumerate(all_correct_lists):
+        eps: float = eps_values[i]
+        axes[i].plot(
+            range(1, args.epochs + 1),
+            correct_list,
+            marker="o",
+            label=f"With DP eps={eps:.1f}",
+        )
+        axes[i].plot(
+            range(1, len(noDP_data) + 1),
+            noDP_data,
+            marker="x",
+            label="No DP (Raw Data)",
+        )
+        axes[i].set_xlabel("Epoch")
+        axes[i].set_ylabel("Correct")
+        axes[i].set_ylim([0, 10000])
+        axes[i].set_title(f"eps={eps:.1f}")
+        axes[i].legend()
+        axes[i].grid()
+
+    plt.suptitle(
+        r"Impact of Laplace Mechanism for DP on Model Accuracy with $\sqrt{m}$ Scaling"
+    )
+
+    plt.tight_layout(
+        rect=(0, 0, 1, 0.97)
+    )  # 全体のタイトルを表示するためにレイアウトを調整
+    plt.show()
 
 
 def main() -> None:
@@ -235,24 +292,9 @@ def main() -> None:
 
     scheduler = StepLR(optimizer, step_size=1, gamma=args.gamma)
 
-    eps_values: list[float] = [0.1 * i for i in range(1, 3)]
+    # eps_values: list[float] = [0.1 * i for i in range(1, 3)]
+    eps_values: list[float] = [0.1 * i for i in range(1, 11)]
     all_correct_lists: list[list[int]] = []
-    noDP_data: list[int] = [
-        1122,
-        3119,
-        4230,
-        4861,
-        5003,
-        5201,
-        5350,
-        5496,
-        5546,
-        5623,
-        5675,
-        5698,
-        5704,
-        5716,
-    ]
 
     for eps in eps_values:
         privacy_params = PrivacyParams(eps=eps, sensitivity=1.0, mean=0)
@@ -273,38 +315,7 @@ def main() -> None:
     if args.save_model:
         torch.save(model.state_dict(), "mnist_cnn.pt")
 
-    # グラフの作成
-    fig, axes = plt.subplots(5, 2, figsize=(15, 25))
-    axes = axes.flatten()
-
-    for i, correct_list in enumerate(all_correct_lists):
-        eps: float = eps_values[i]
-        axes[i].plot(
-            range(1, args.epochs + 1),
-            correct_list,
-            marker="o",
-            label=f"With DP eps={eps:.1f}",
-        )
-        axes[i].plot(
-            range(1, len(noDP_data) + 1),
-            noDP_data,
-            marker="x",
-            label="No DP (Raw Data)",
-        )
-        axes[i].set_xlabel("Epoch")
-        axes[i].set_ylabel("Correct")
-        axes[i].set_ylim([0, 10000])
-        axes[i].set_title(f"eps={eps:.1f}")
-        axes[i].legend()
-        axes[i].grid()
-
-    plt.suptitle(
-        "Impact of Laplace Mechanism for DP on Model Accuracy"
-    )  # 全体のタイトルを設定
-    plt.tight_layout(
-        rect=(0, 0, 1, 0.97)
-    )  # 全体のタイトルを表示するためにレイアウトを調整
-    plt.show()
+    plot_graph(args, eps_values, all_correct_lists)
 
 
 if __name__ == "__main__":
