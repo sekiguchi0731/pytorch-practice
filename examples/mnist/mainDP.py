@@ -1,8 +1,8 @@
 import argparse
+import math
 from typing import Any
 
 import matplotlib.pyplot as plt
-import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -47,7 +47,7 @@ class Net(nn.Module):
         return output
 
 
-def train(args, model, device, train_loader, optimizer, epoch) -> None:
+def train(args, model, device, train_loader, optimizer, epoch, is_Scaling) -> None:
     model.train()
     # ローカルモデルに読み込み
     ## モデルのインスタンスを作成（同じモデルの定義が必要）
@@ -72,9 +72,14 @@ def train(args, model, device, train_loader, optimizer, epoch) -> None:
         privacy_params: PrivacyParams = model.privacy_params
 
         for grad in grads:
-            noise: torch.Tensor = torch.distributions.Laplace(
-                privacy_params.mean, privacy_params.var
-            ).sample(grad.shape) / math.sqrt(len(grads))
+            if is_Scaling:
+                noise: torch.Tensor = torch.distributions.Laplace(
+                    privacy_params.mean, privacy_params.var
+                ).sample(grad.shape) / math.sqrt(len(grads))
+            else:
+                noise: torch.Tensor = torch.distributions.Laplace(
+                    privacy_params.mean, privacy_params.var
+                ).sample(grad.shape)
             noised_grads.append(grad + noise)
 
         # オプティマイザのパラメータに手動で勾配を設定
@@ -135,46 +140,33 @@ def test(model, device, test_loader) -> int:
     return correct
 
 def plot_graph(
-    args, eps_values: list[float], all_correct_lists: list[list[int]]
+    args,
+    eps_values: list[float],
+    all_correct_lists_without_scaling: list[list[int]],
+    all_correct_lists_with_scaling: list[list[int]],
 ) -> None:
-    # DPを実装しなかった場合の結果の一例
-    noDP_data: list[int] = [
-        1122,
-        3119,
-        4230,
-        4861,
-        5003,
-        5201,
-        5350,
-        5496,
-        5546,
-        5623,
-        5675,
-        5698,
-        5704,
-        5716,
-    ]
     # グラフの作成
     fig, axes = plt.subplots(5, 2, figsize=(15, 25))
     axes = axes.flatten()
 
-    for i, correct_list in enumerate(all_correct_lists):
+    for i, correct_list in enumerate(all_correct_lists_without_scaling):
         eps: float = eps_values[i]
         axes[i].plot(
             range(1, args.epochs + 1),
             correct_list,
             marker="o",
-            label=f"With DP eps={eps:.1f}",
+            label="Without Scaling",
         )
         axes[i].plot(
-            range(1, len(noDP_data) + 1),
-            noDP_data,
-            marker="x",
-            label="No DP (Raw Data)",
+            range(1, args.epochs + 1),
+            all_correct_lists_with_scaling[i],
+            marker="o",
+            label="With Scaling",
         )
+
         axes[i].set_xlabel("Epoch")
         axes[i].set_ylabel("Correct")
-        axes[i].set_ylim([0, 10000])
+        axes[i].set_ylim([0, 2500])
         axes[i].set_title(f"eps={eps:.1f}")
         axes[i].legend()
         axes[i].grid()
@@ -286,36 +278,72 @@ def main() -> None:
     train_loader = DataLoader(dataset1, **train_kwargs)
     test_loader = DataLoader(dataset2, **test_kwargs)
 
-    privacy_params = PrivacyParams(eps=0.5, sensitivity=1.0, mean=0)
-    model: Net = Net(privacy_params).to(device)
-    optimizer = optim.Adadelta(model.parameters(), lr=args.lr)
-
-    scheduler = StepLR(optimizer, step_size=1, gamma=args.gamma)
-
     # eps_values: list[float] = [0.1 * i for i in range(1, 3)]
     eps_values: list[float] = [0.1 * i for i in range(1, 11)]
-    all_correct_lists: list[list[int]] = []
+    all_correct_lists_without_scaling: list[list[int]] = []
+    all_correct_lists_with_scaling: list[list[int]] = []
 
     for eps in eps_values:
+        print(eps)
         privacy_params = PrivacyParams(eps=eps, sensitivity=1.0, mean=0)
-        model: Net = Net(privacy_params).to(device)
-        optimizer = optim.Adadelta(model.parameters(), lr=args.lr)
+        model_without_scaling: Net = Net(privacy_params).to(device)
+        model_with_scaling: Net = Net(privacy_params).to(device)
+        optimizer_without_scaling = optim.Adadelta(
+            model_without_scaling.parameters(), lr=args.lr
+        )
+        optimizer_with_scaling = optim.Adadelta(
+            model_with_scaling.parameters(), lr=args.lr
+        )
 
-        scheduler = StepLR(optimizer, step_size=1, gamma=args.gamma)
-        correct_list: list[int] = []
+        scheduler_without_scaling = StepLR(
+            optimizer_without_scaling, step_size=1, gamma=args.gamma
+        )
+        scheduler_with_scaling = StepLR(
+            optimizer_with_scaling, step_size=1, gamma=args.gamma
+        )
+
+        correct_list_without_scaling: list[int] = []
+        correct_list_with_scaling: list[int] = []
 
         for epoch in range(1, args.epochs + 1):
-            train(args, model, device, train_loader, optimizer, epoch)
-            correct: int = test(model, device, test_loader)
-            correct_list.append(correct)
-            scheduler.step()
+            train(
+                args,
+                model_without_scaling,
+                device,
+                train_loader,
+                optimizer_without_scaling,
+                epoch,
+                False,
+            )
+            correct: int = test(model_without_scaling, device, test_loader)
+            correct_list_without_scaling.append(correct)
+            scheduler_without_scaling.step()
+            train(
+                args,
+                model_with_scaling,
+                device,
+                train_loader,
+                optimizer_with_scaling,
+                epoch,
+                True,
+            )
+            correct = test(model_with_scaling, device, test_loader)
+            correct_list_with_scaling.append(correct)
+            scheduler_with_scaling.step()
 
-        all_correct_lists.append(correct_list)
+        all_correct_lists_without_scaling.append(correct_list_without_scaling)
+        all_correct_lists_with_scaling.append(correct_list_with_scaling)
 
     if args.save_model:
-        torch.save(model.state_dict(), "mnist_cnn.pt")
+        torch.save(model_without_scaling.state_dict(), "mnist_cnn1.pt")
+        torch.save(model_with_scaling.state_dict(), "mnist_cnn2.pt")
 
-    plot_graph(args, eps_values, all_correct_lists)
+    plot_graph(
+        args,
+        eps_values,
+        all_correct_lists_without_scaling,
+        all_correct_lists_with_scaling,
+    )
 
 
 if __name__ == "__main__":
