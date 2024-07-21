@@ -1,5 +1,4 @@
 import argparse
-import math
 from typing import Any
 
 import matplotlib.pyplot as plt
@@ -25,8 +24,6 @@ class Net(nn.Module):
         super(Net, self).__init__()
         self.conv1 = nn.Conv2d(1, 32, 3, 1)
         self.conv2 = nn.Conv2d(32, 64, 3, 1)
-        self.dropout1 = nn.Dropout(0.25)
-        self.dropout2 = nn.Dropout(0.5)
         self.fc1 = nn.Linear(9216, 128)
         self.fc2 = nn.Linear(128, 10)
         self.privacy_params: PrivacyParams = privacy_params
@@ -37,55 +34,104 @@ class Net(nn.Module):
         x = self.conv2(x)
         x = F.relu(x)
         x = F.max_pool2d(x, 2)
-        x = self.dropout1(x)
         x = torch.flatten(x, 1)
         x = self.fc1(x)
         x = F.relu(x)
-        x = self.dropout2(x)
         x = self.fc2(x)
         output: torch.Tensor = F.log_softmax(x, dim=1)
         return output
 
 
+# 勾配のクリッピング
+## modelとclipping_normを受け取り、model内の勾配を直接変更
+def clip_gradients(model, clipping_norm=1.0) -> None:
+    # 全てのパラメータについて勾配をクリッピング
+    for p in model.parameters():
+        if p.grad is not None:
+            # print(p.grad[0])
+            param_norm: torch.Tensor = p.grad.data.norm(2)
+            clip_coef: torch.Tensor = clipping_norm / (param_norm + 1e-6)
+            if clip_coef < 1:
+                p.grad.data.mul_(clip_coef)
+
+
+# 勾配の平均化
+def average_gradients(grads_per_data: list[list[torch.Tensor]]) -> list[torch.Tensor]:
+    num_data_points: int = len(grads_per_data)
+    num_params: int = len(grads_per_data[0])
+    avg_grads: list[torch.Tensor] = []
+
+    for i in range(num_params):
+        for j in range(num_data_points):
+            stacked_grads: torch.Tensor = torch.stack([grads_per_data[j][i]])
+        avg_grad: torch.Tensor = torch.mean(stacked_grads, dim=0)
+        avg_grads.append(avg_grad)
+
+    return avg_grads
+
+
 def train(args, model, device, train_loader, optimizer, epoch, is_Scaling) -> None:
     model.train()
-    # ローカルモデルに読み込み
-    ## モデルのインスタンスを作成（同じモデルの定義が必要）
-    local_model = Net(model.privacy_params)
-    ## グローバルモデルのパラメータを読み込み
-    local_model.load_state_dict(model.state_dict())
-    local_model.train()
-    for batch_idx, (data, target) in enumerate(train_loader):
-        # data, target = data.to(device), target.to(device)
-        optimizer.zero_grad()
-        output: torch.Tensor = local_model(data)
-        loss: torch.Tensor = F.nll_loss(output, target)
-        loss.backward()
-        # 計算された勾配を保存
-        grads: list[torch.Tensor] = [
-            param.grad.clone()
-            for param in local_model.parameters()
-            if param.grad is not None
-        ]
+    for batch_idx, (dataset, targets) in enumerate(train_loader):
+        dataset, targets = dataset.to(device), targets.to(device)
+        output: torch.Tensor = model(dataset)
+        grads_per_data: list[list[torch.Tensor]] = []
+        for idx, data in enumerate(dataset):
+            optimizer.zero_grad()
+            loss: torch.Tensor = F.nll_loss(output[idx], targets[idx])
+            # 計算グラフを保持：dataが複数ある場合に、複数回backwardを計算できないから。
+            loss.backward(retain_graph=True)
+            # print(loss)
+            clip_gradients(model)
+            grads: list[torch.Tensor] = [
+                p.grad.clone() for p in model.parameters() if p.grad is not None
+            ]
+            grads_per_data.append(grads)
 
-        noised_grads: list[torch.Tensor] = []
-        privacy_params: PrivacyParams = model.privacy_params
+        # print(len(grads_per_data[0][0]))
+        # 勾配の平均化
+        # 勾配の平均化
+        avg_grads: list[torch.Tensor] = average_gradients(grads_per_data)
+        # print(len(avg_grads))
 
-        for grad in grads:
-            if is_Scaling:
-                noise: torch.Tensor = torch.distributions.Laplace(
-                    privacy_params.mean, privacy_params.var
-                ).sample(grad.shape) / math.sqrt(len(grads))
-            else:
-                noise: torch.Tensor = torch.distributions.Laplace(
-                    privacy_params.mean, privacy_params.var
-                ).sample(grad.shape)
-            noised_grads.append(grad + noise)
+        for param, avg_grad in zip(model.parameters(), avg_grads):
+            if param.grad is not None:
+                param.grad = avg_grad
+
+        # optimizer.zero_grad()
+        # output: torch.Tensor = model(data)
+        # losses: torch.Tensor = F.nll_loss(output, target, reduction='none')
+        # print(losses)
+        # print(len(data))
+        # for loss in losses:
+        #     loss.backward()
+        #     # 勾配のクリッピング
+        #     clip_gradients(model)
+        # # 計算後の勾配を保存
+        # grads: list[torch.Tensor] = [
+        #     param.grad.clone()
+        #     for param in model.parameters()
+        #     if param.grad is not None
+        # ]
+
+
+        # ノイズの追加
+        # noised_grads: list[torch.Tensor] = []
+        # privacy_params: PrivacyParams = model.privacy_params
+
+        # for grad in clipped_grads:
+        #     if is_Scaling:
+        #         noise: torch.Tensor = torch.distributions.Laplace(
+        #             privacy_params.mean, privacy_params.var
+        #         ).sample(grad.shape) / math.sqrt(len(grads))
+        #     else:
+        #         noise: torch.Tensor = torch.distributions.Laplace(
+        #             privacy_params.mean, privacy_params.var
+        #         ).sample(grad.shape)
+        #     noised_grads.append(grad + noise)
 
         # オプティマイザのパラメータに手動で勾配を設定
-        for param, grad in zip(model.parameters(), noised_grads):
-            param.grad = grad.to(device)
-        # for param, grad in zip(model.parameters(), grads):
+        # for param, grad in zip(model.parameters(), noised_grads):
         #     param.grad = grad.to(device)
 
         # パラメータの更新
@@ -106,18 +152,12 @@ def train(args, model, device, train_loader, optimizer, epoch, is_Scaling) -> No
 
 def test(model, device, test_loader) -> int:
     model.eval()
-    # ローカルモデルに読み込み
-    ## モデルのインスタンスを作成（同じモデルの定義が必要）
-    local_model = Net(model.privacy_params)
-    ## グローバルモデルのパラメータを読み込み
-    local_model.load_state_dict(model.state_dict())
-    local_model.eval()
     test_loss: float = 0
     correct: int = 0
     with torch.no_grad():
         for data, target in test_loader:
-            # data, target = data.to(device), target.to(device)
-            output: torch.Tensor = local_model(data)
+            data, target = data.to(device), target.to(device)
+            output: torch.Tensor = model(data)
             test_loss += F.nll_loss(
                 output, target, reduction="sum"
             ).item()  # sum up batch loss
@@ -151,6 +191,22 @@ def plot_graph(
 
     for i, correct_list in enumerate(all_correct_lists_without_scaling):
         eps: float = eps_values[i]
+        noDP_list: list[int] = [
+            9821,
+            9871,
+            9887,
+            9900,
+            9899,
+            9906,
+            9907,
+            9912,
+            9906,
+            9919,
+            9916,
+            9914,
+            9918,
+            9917,
+        ]
         axes[i].plot(
             range(1, args.epochs + 1),
             correct_list,
@@ -159,14 +215,20 @@ def plot_graph(
         )
         axes[i].plot(
             range(1, args.epochs + 1),
-            all_correct_lists_with_scaling[i],
+            noDP_list,
             marker="o",
             label="With Scaling",
         )
+        # axes[i].plot(
+        #     range(1, args.epochs + 1),
+        #     all_correct_lists_with_scaling[i],
+        #     marker="o",
+        #     label="With Scaling",
+        # )
 
         axes[i].set_xlabel("Epoch")
         axes[i].set_ylabel("Correct")
-        axes[i].set_ylim([0, 2500])
+        axes[i].set_ylim([0, 10000])
         axes[i].set_title(f"eps={eps:.1f}")
         axes[i].legend()
         axes[i].grid()
@@ -278,8 +340,8 @@ def main() -> None:
     train_loader = DataLoader(dataset1, **train_kwargs)
     test_loader = DataLoader(dataset2, **test_kwargs)
 
-    # eps_values: list[float] = [0.1 * i for i in range(1, 3)]
-    eps_values: list[float] = [0.1 * i for i in range(1, 11)]
+    eps_values: list[float] = [0.1 * i for i in range(1, 3)]
+    # eps_values: list[float] = [0.1 * i for i in range(1, 11)]
     all_correct_lists_without_scaling: list[list[int]] = []
     all_correct_lists_with_scaling: list[list[int]] = []
 
