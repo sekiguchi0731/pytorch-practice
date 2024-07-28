@@ -19,7 +19,7 @@ class PrivacyParams:
         self.eps: float = eps
         self.delta: float = delta
         self.mean: float = mean
-        self.var: float = math.sqrt(2 * math.log(1.25 / self.delta)) / self.eps
+        self.std: float = math.sqrt(2 * math.log(1.25 / self.delta)) / self.eps
 
 
 class Net(nn.Module):
@@ -57,15 +57,16 @@ def clip_gradients(grads, clipping_norm=1.0) -> list[torch.Tensor]:
     return clipped_grads
 
 
-# ラプラスノイズの追加
-def add_laplace_noise(model, grads) -> list[torch.Tensor]:
+# ガウスノイズの追加
+def add_gaussian_noise(model, grads) -> list[torch.Tensor]:
     privacy_params: PrivacyParams = model.privacy_params
     noised_grads: list[torch.Tensor] = []
     for grad in grads:
-        noise: torch.Tensor = torch.distributions.Laplace(
-            privacy_params.mean, privacy_params.var
-        ).sample(grad.shape)
-        noised_grads.append(grad + (noise / math.sqrt(len(grads))).to(grad.device))
+        noise: torch.Tensor = (
+            torch.randn(grad.shape, device=grad.device) * privacy_params.std
+            + privacy_params.mean
+        )
+        noised_grads.append(grad + noise.to(grad.device))
     return noised_grads
 
 
@@ -105,8 +106,9 @@ def train(args, model, device, train_loader, optimizer, epoch, is_Scaling) -> No
             for i in range(len(clipped_grads_per_data[0]))
         ]
 
+        noised_grads: list[torch.Tensor] = avg_grads
         # ノイズの追加
-        noised_grads: list[torch.Tensor] = add_laplace_noise(model, avg_grads)
+        # noised_grads: list[torch.Tensor] = add_gaussian_noise(model, avg_grads)
 
         # 平均化された勾配をモデルに適用
         for param, noised_grad in zip(model.parameters(), noised_grads):
@@ -190,8 +192,8 @@ def plot_graph(
         axes[i].plot(
             range(1, args.epochs + 1),
             correct_list,
-            marker="o",
-            label="With Scaled DP",
+            marker="x",
+            label="With DP",
         )
         axes[i].plot(
             range(1, args.epochs + 1),
@@ -213,7 +215,7 @@ def plot_graph(
         axes[i].legend()
         axes[i].grid()
 
-    plt.suptitle(r"Impact of Laplace Mechanism for DP on Model Accuracy")
+    plt.suptitle(r"Impact of DP on Model Accuracy")
     # plt.suptitle(
     #     r"Impact of Laplace Mechanism for DP on Model Accuracy with $\sqrt{m}$ Scaling"
     # )
@@ -316,11 +318,12 @@ def main() -> None:
     train_loader = DataLoader(dataset1, **train_kwargs)
     test_loader = DataLoader(dataset2, **test_kwargs)
 
-    eps_values: list[float] = [0.5 * i for i in range(1, 2)]
+    eps_values: list[float] = [0.01 * i for i in range(1, 11)]
     all_collect_lists: list[list[int]] = []
     for eps in eps_values:
         privacy_params = PrivacyParams(eps=eps, delta=0.0001, mean=0)
         model: Net = Net(privacy_params).to(device)
+        print(eps)
         optimizer = optim.Adadelta(model.parameters(), lr=args.lr)
         scheduler = StepLR(optimizer, step_size=1, gamma=args.gamma)
         collect_list: list[int] = []
