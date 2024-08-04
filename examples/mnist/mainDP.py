@@ -13,9 +13,7 @@ from torchvision import datasets, transforms
 
 
 class PrivacyParams:
-    def __init__(
-        self, eps: float = 0.5, delta: float = 0.0001, mean: float = 0
-    ) -> None:
+    def __init__(self, eps: float = 0.5, delta: float = 0.00001, mean: float = 0) -> None:
         self.eps: float = eps
         self.delta: float = delta
         self.mean: float = mean
@@ -45,32 +43,27 @@ class Net(nn.Module):
         return output
 
 
-# 勾配のクリッピング
-def clip_gradients(grads, clipping_norm=1.0) -> list[torch.Tensor]:
+def clip_gradients(grads: list[torch.Tensor], clipping_norm: float = 1.0) -> list[torch.Tensor]:
     clipped_grads: list[torch.Tensor] = []
     for grad in grads:
-        param_norm: torch.Tensor = grad.norm(2)
-        clip_coef: torch.Tensor = clipping_norm / (param_norm + 1e-6)
+        param_norm: float = grad.norm(2).item() ** 2
+        clip_coef: float = clipping_norm / (math.sqrt(param_norm) + 1e-6)
         if clip_coef < 1:
-            grad: torch.Tensor = grad.clone() * clip_coef.to(grad.device)
+            grad = grad.clone() * clip_coef
         clipped_grads.append(grad)
     return clipped_grads
 
 
-# ガウスノイズの追加
-def add_gaussian_noise(model, grads) -> list[torch.Tensor]:
+def add_gaussian_noise(model, grads: list[torch.Tensor]) -> list[torch.Tensor]:
     privacy_params: PrivacyParams = model.privacy_params
     noised_grads: list[torch.Tensor] = []
     for grad in grads:
-        noise: torch.Tensor = (
-            torch.randn(grad.shape, device=grad.device) * privacy_params.std
-            + privacy_params.mean
-        )
+        noise: torch.Tensor = torch.randn(grad.shape) * privacy_params.std + privacy_params.mean
         noised_grads.append(grad + noise.to(grad.device))
     return noised_grads
 
 
-def train(args, model, device, train_loader, optimizer, epoch, is_Scaling) -> None:
+def train(args, model, device, train_loader, optimizer, epoch) -> None:
     model.train()
     for batch_idx, (data, target) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
@@ -87,9 +80,7 @@ def train(args, model, device, train_loader, optimizer, epoch, is_Scaling) -> No
         for i in range(len(data)):
             model.zero_grad()
             loss[i].backward(retain_graph=True)
-            grads: list[torch.Tensor] = [
-                p.grad.clone() for p in model.parameters() if p.grad is not None
-            ]
+            grads: list[torch.Tensor] = [p.grad.clone() for p in model.parameters() if p.grad is not None]
             grads_per_data.append(grads)
 
         # 各データポイントの勾配をクリッピング
@@ -106,15 +97,14 @@ def train(args, model, device, train_loader, optimizer, epoch, is_Scaling) -> No
             for i in range(len(clipped_grads_per_data[0]))
         ]
 
-        noised_grads: list[torch.Tensor] = avg_grads
+        # noised_grads: list[torch.Tensor] = avg_grads
         # ノイズの追加
-        # noised_grads: list[torch.Tensor] = add_gaussian_noise(model, avg_grads)
+        noised_grads: list[torch.Tensor] = add_gaussian_noise(model, avg_grads)
 
         # 平均化された勾配をモデルに適用
         for param, noised_grad in zip(model.parameters(), noised_grads):
             if param.grad is not None:
-                param.grad.data.copy_(noised_grad)  # grad を直接コピーする
-            # param.grad.data = noised_grad
+                param.grad.data.copy_(noised_grad)
 
         optimizer.step()
 
@@ -211,7 +201,7 @@ def plot_graph(
         axes[i].set_xlabel("Epoch")
         axes[i].set_ylabel("Correct")
         axes[i].set_ylim([0, 10000])
-        axes[i].set_title(f"eps={eps:.1f}")
+        axes[i].set_title(f"eps={eps:.2f}")
         axes[i].legend()
         axes[i].grid()
 
@@ -310,26 +300,24 @@ def main() -> None:
         train_kwargs.update(cuda_kwargs)
         test_kwargs.update(cuda_kwargs)
 
-    transform = transforms.Compose(
-        [transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]
-    )
+    transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))])
     dataset1 = datasets.MNIST("../data", train=True, download=True, transform=transform)
     dataset2 = datasets.MNIST("../data", train=False, transform=transform)
     train_loader = DataLoader(dataset1, **train_kwargs)
     test_loader = DataLoader(dataset2, **test_kwargs)
 
-    eps_values: list[float] = [0.01 * i for i in range(1, 11)]
+    eps_values: list[float] = [0.5 * i for i in range(1, 2)]
     all_collect_lists: list[list[int]] = []
     for eps in eps_values:
-        privacy_params = PrivacyParams(eps=eps, delta=0.0001, mean=0)
+        privacy_params = PrivacyParams(eps=eps, delta=0.00001, mean=0)
         model: Net = Net(privacy_params).to(device)
-        print(eps)
-        optimizer = optim.Adadelta(model.parameters(), lr=args.lr)
+        print(eps, privacy_params.delta, privacy_params.std)
+        optimizer = optim.SGD(model.parameters(), lr=args.lr)
         scheduler = StepLR(optimizer, step_size=1, gamma=args.gamma)
         collect_list: list[int] = []
 
         for epoch in range(1, args.epochs + 1):
-            train(args, model, device, train_loader, optimizer, epoch, False)
+            train(args, model, device, train_loader, optimizer, epoch)
             collect_list.append(test(model, device, test_loader))
             scheduler.step()
 
