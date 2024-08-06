@@ -43,22 +43,25 @@ class Net(nn.Module):
         return output
 
 
+# 勾配のクリッピング
 def clip_gradients(grads: list[torch.Tensor], clipping_norm: float = 1.0) -> list[torch.Tensor]:
     clipped_grads: list[torch.Tensor] = []
     for grad in grads:
-        param_norm: float = grad.norm(2).item() ** 2
+        param_norm: float = (grad.norm(2).item() ** 2) ** 0.5
         clip_coef: float = clipping_norm / (math.sqrt(param_norm) + 1e-6)
         if clip_coef < 1:
-            grad = grad.clone() * clip_coef
+            grad.mul_(clip_coef)
         clipped_grads.append(grad)
     return clipped_grads
 
 
+# ガウシアンノイズの追加
 def add_gaussian_noise(model, grads: list[torch.Tensor]) -> list[torch.Tensor]:
     privacy_params: PrivacyParams = model.privacy_params
     noised_grads: list[torch.Tensor] = []
     for grad in grads:
-        noise: torch.Tensor = torch.randn(grad.shape) * privacy_params.std + privacy_params.mean
+        # noise: torch.Tensor = torch.normal(privacy_params.mean, privacy_params.std, size=grad.shape)
+        noise: torch.Tensor = torch.FloatTensor(grad.shape).normal_(privacy_params.mean, privacy_params.std)
         noised_grads.append(grad + noise.to(grad.device))
     return noised_grads
 
@@ -201,7 +204,7 @@ def plot_graph(
         axes[i].set_xlabel("Epoch")
         axes[i].set_ylabel("Correct")
         axes[i].set_ylim([0, 10000])
-        axes[i].set_title(f"eps={eps:.2f}")
+        axes[i].set_title(f"eps={eps:.1f}")
         axes[i].legend()
         axes[i].grid()
 
@@ -306,13 +309,13 @@ def main() -> None:
     train_loader = DataLoader(dataset1, **train_kwargs)
     test_loader = DataLoader(dataset2, **test_kwargs)
 
-    eps_values: list[float] = [0.5 * i for i in range(1, 2)]
+    eps_values: list[float] = [0.1 * i for i in range(1, 11)]
     all_collect_lists: list[list[int]] = []
     for eps in eps_values:
         privacy_params = PrivacyParams(eps=eps, delta=0.00001, mean=0)
         model: Net = Net(privacy_params).to(device)
         print(eps, privacy_params.delta, privacy_params.std)
-        optimizer = optim.SGD(model.parameters(), lr=args.lr)
+        optimizer = optim.Adadelta(model.parameters(), lr=args.lr)
         scheduler = StepLR(optimizer, step_size=1, gamma=args.gamma)
         collect_list: list[int] = []
 
