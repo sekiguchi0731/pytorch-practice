@@ -164,6 +164,7 @@ def plot_graph(
     eps_values: list[float],
     all_correct_lists_without_scaling: list[list[int]],
     all_correct_lists_with_scaling: list[list[int]] = [],
+    save_path: str = "../figures/graph.png",
 ) -> None:
     # グラフの作成
     fig, axes = plt.subplots(5, 2, figsize=(15, 25))
@@ -221,6 +222,10 @@ def plot_graph(
     plt.tight_layout(
         rect=(0, 0, 1, 0.97)
     )  # 全体のタイトルを表示するためにレイアウトを調整
+
+    # グラフをファイルに保存
+    plt.savefig(save_path)
+
     plt.show()
 
 
