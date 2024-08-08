@@ -93,8 +93,8 @@ def train(args, model, device, train_loader, optimizer, epoch) -> None:
         ]
 
         # クリッピングされた勾配の平均を計算
-        avg_grads: list[torch.Tensor] = [
-            torch.mean(
+        sum_grads: list[torch.Tensor] = [
+            torch.sum(
                 torch.stack([grads[i] for grads in clipped_grads_per_data]), dim=0
             )
             for i in range(len(clipped_grads_per_data[0]))
@@ -102,10 +102,15 @@ def train(args, model, device, train_loader, optimizer, epoch) -> None:
 
         # noised_grads: list[torch.Tensor] = avg_grads
         # ノイズの追加
-        noised_grads: list[torch.Tensor] = add_gaussian_noise(model, avg_grads)
+        noised_grads: list[torch.Tensor] = add_gaussian_noise(model, sum_grads)
+        
+        # 勾配の総和をバッチサイズで割る 
+        avg_noised_grads: list[torch.Tensor] = [
+            noised_grad / len(data) for noised_grad in noised_grads
+        ]
 
         # 平均化された勾配をモデルに適用
-        for param, noised_grad in zip(model.parameters(), noised_grads):
+        for param, noised_grad in zip(model.parameters(), avg_noised_grads):
             if param.grad is not None:
                 param.grad.data.copy_(noised_grad)
 
@@ -309,7 +314,7 @@ def main() -> None:
     train_loader = DataLoader(dataset1, **train_kwargs)
     test_loader = DataLoader(dataset2, **test_kwargs)
 
-    eps_values: list[float] = [0.1 * i for i in range(1, 11)]
+    eps_values: list[float] = [0.5 * i for i in range(1, 2)]
     all_collect_lists: list[list[int]] = []
     for eps in eps_values:
         privacy_params = PrivacyParams(eps=eps, delta=0.00001, mean=0)
